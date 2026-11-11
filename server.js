@@ -1,5 +1,9 @@
 const express = require("express");
 const db = require("./db");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+
+const SECRETO = "123456"
 
 const cantidad = db.prepare(
     "SELECT COUNT(*) AS total FROM tickets"
@@ -21,14 +25,34 @@ app.use(express.json());
 const cors = require("cors");
 app.use(cors());
 
+// Middleware para verificar el token de JWT
+const verificarToken = (req, res, next) => {
+    const auth = req.headers.authorization;
+    if(!auth || !auth.startsWith("Bearer ")){
+        return res.status(401).json({
+            error: "Token no proporcionado"
+        })
+    }
+    const token = auth.split(" ")[1];
+    try {
+        const datos = jwt.verify(token, SECRETO);
+        req.usuario = datos;
+        next();
+    } catch {
+        return res.status(401).json({
+            error: "Token invalido o expirado"
+        })
+    }
+}
+
 // Api para consultar tickets
-app.get("/api/tickets", (req, res) => {
+app.get("/api/tickets", verificarToken, (req, res) => {
     const tickets = db.prepare("SELECT * FROM tickets").all();
     res.json(tickets);
 })
 
 // Api para agregar un ticket
-app.post("/api/tickets", (req, res) => {
+app.post("/api/tickets", verificarToken, (req, res) => {
     const {titulo, prioridad} = req.body
     if(!titulo || !prioridad) {
         return res.status(400).json({
@@ -46,7 +70,7 @@ app.post("/api/tickets", (req, res) => {
 })
 
 // Api para actualizar un ticket
-app.put("/api/tickets/:id", (req, res) => {
+app.put("/api/tickets/:id", verificarToken, (req, res) => {
     const id = Number(req.params.id);
     const ticket = db.prepare(
         "SELECT * FROM tickets WHERE id = ?"
@@ -70,7 +94,7 @@ app.put("/api/tickets/:id", (req, res) => {
 })
 
 // Api para eliminar un registro
-app.delete("/api/tickets/:id", (req, res) => {
+app.delete("/api/tickets/:id", verificarToken, (req, res) => {
     const id = Number(req.params.id);
     const ticket = db.prepare(
         "SELECT * FROM tickets WHERE id = ?"
@@ -84,6 +108,52 @@ app.delete("/api/tickets/:id", (req, res) => {
     res.json({
         mensaje: "Ticket eliminado",
         ticket
+    })
+})
+
+// Rutas para el login de la pagina
+app.post("/api/registro", async (req, res) => {
+    const {nombre, email, password} = req.body;
+    if(!nombre || !email || !password){
+        return res.status(400).json({ error: "Faltan datos"})
+    }
+    const existe = db.prepare("SELECT * FROM usuarios WHERE email = ?").get(email);
+    if(existe) {
+        return res.status(400).json({ error: "Ese correo ya esta registrado"})
+    }
+    const hash = await bcrypt.hash(password, 10);
+    const resultado = db.prepare("INSERT INTO usuarios (nombre, email, password) VALUES (?, ?, ?)").run(nombre, email, hash);
+    const usuario = db.prepare("SELECT id, nombre, email FROM usuarios WHERE id = ?").get(resultado.lastInsertRowid);
+    res.status(201).json(usuario);
+})
+
+// ruta para el login
+app.post("/api/login", async (req, res) => {
+    const { email, password } = req.body;
+    if(!email || !password) {
+        return res.status(400).json({error: "Faltan datos"});
+    }
+    const usuario = db.prepare(
+        "SELECT * FROM usuarios WHERE email = ?"
+    ).get(email);
+    if(!usuario) {
+        return res.status(401).json({error: "Correo electronico o contraseña incorrectos"});
+    }
+    const coincide = await bcrypt.compare(password, usuario.password);
+    if(!coincide){
+        return res.status(401).json({error: "Correo electronico o contraseña incorrectos"})
+    }
+    const token = jwt.sign({
+        id: usuario.id,
+        email: usuario.email,
+    }, SECRETO, {
+        expiresIn: "1h"
+    });
+    res.json({
+        id: usuario.id,
+        nombre: usuario.nombre,
+        email: usuario.email,
+        token
     })
 })
 
